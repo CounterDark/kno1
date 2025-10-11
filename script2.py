@@ -2,6 +2,7 @@ import argparse
 import tensorflow as tf
 from pathlib import Path
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def getArgs():
@@ -29,7 +30,6 @@ def getModel(x_train, y_train):
             loss="sparse_categorical_crossentropy",
             metrics=["accuracy"],
         )
-        model.fit(x_train, y_train, epochs=5)
     return model
 
 
@@ -39,9 +39,29 @@ def main():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
     x_train, x_test = x_train / 255.0, x_test / 255.0
     model = getModel(x_train, y_train)
+    history = model.fit(x_train, y_train, epochs=10, validation_split=0.2)
+
+    # print(history.history.keys())
+
+    plt.figure()
+    plt.plot(history.history["accuracy"], label="train_accuracy")
+    plt.plot(history.history["val_accuracy"], label="val_accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.show()
+
+    plt.figure()
+    plt.plot(history.history["loss"], label="train_loss")
+    plt.plot(history.history["val_loss"], label="val_loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.show()
+
     # model.evaluate(x_test, y_test)
 
-    print(args)
+    # print(args)
 
     if args.image:
         img = tf.keras.utils.load_img(
