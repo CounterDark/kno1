@@ -1,275 +1,261 @@
-import argparse
-import os
+#!/usr/bin/env python3
+"""
+wine_methods_only.py
+Function-only reimplementation (no classes) that:
+ - loads and shuffles the wine csv from public_resources/wine.csv
+ - one-hot encodes classes
+ - scales features
+ - defines two model-builder functions
+ - trains or loads models (saved as <name>_model.keras)
+ - plots training curves
+ - performs a one-sample prediction from argparse inputs
 
-import matplotlib.pyplot as plt
+Usage (train & predict example):
+  python wine_methods_only.py --recalc --model second --epochs 15 --batch_size 32 --lr 0.001
+  python wine_methods_only.py --predict --alcohol 13.2 --malic-acid 1.78 ... --proline 1050
+"""
+from pathlib import Path
+import argparse
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from tensorflow.keras import Sequential
+from tensorflow.keras import layers
+from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from tensorflow.python.keras import (
-    callbacks,
-    initializers,
-    layers,
-    models,
-    optimizers,
-    utils,
-)
+import matplotlib.pyplot as plt
+from matplotlib.offsetbox import AnchoredText
+import sklearn
 
-DATA_LOCAL = "public_resources/wine.csv"
-NUM_FEATURES = 13
+# -----------------------
+# Data functions
+# -----------------------
+def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42):
+    """Load CSV, assume first column 'class' or headerless with class first.
+       Returns pandas DataFrame with 'class' column if detected, and rest numeric columns."""
+    df = pd.read_csv(path)
+    # If headerless (original UCI), the file may have no header. Try to detect:
+    if df.columns[0] != "class" and df.shape[1] == 14:
+        # assume first col is class; rename for clarity
+        cols = ["class"] + [f"f{i}" for i in range(1, 14)]
+        df.columns = cols
+    if "class" not in df.columns:
+        raise ValueError("CSV must contain class in first column or header named 'class'.")
+    df = df.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    return df
 
-
-def load_csv(local_path=DATA_LOCAL):
-    if not os.path.exists(local_path):
-        raise FileNotFoundError(
-            f"Nie znaleziono pliku {local_path}. Upewnij się, że istnieje."
-        )
-    print(f"Ładuję dane z pliku: {local_path}")
-    return pd.read_csv(local_path, header=None)
-
-
-def prepare_dataset(df):
-    X = df.iloc[:, 1 : 1 + NUM_FEATURES].values.astype(np.float32)
-    y = df.iloc[:, 0].values.astype(int)
-    y = y - 1  # mapowanie klas 1,2,3 -> 0,1,2
-
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-
-    y_oh = utils.to_categorical(y, num_classes=3)
-    return X, y_oh, scaler
-
-
-def build_model_a(input_shape, num_classes, seed=42):
-    init = initializers.HeNormal(seed=seed)
-    model = models.Sequential(name="Model_A_Shallow")
-    model.add(layers.Input(shape=(input_shape,)))
-    model.add(
-        layers.Dense(
-            32, activation="relu", kernel_initializer=init, name="dense_32_relu"
-        )
-    )
-    model.add(
-        layers.Dense(
-            16, activation="relu", kernel_initializer=init, name="dense_16_relu"
-        )
-    )
-    model.add(layers.Dense(num_classes, activation="softmax", name="output_softmax"))
-    return model
-
-
-def build_model_b(input_shape, num_classes, seed=24):
-    model = models.Sequential(name="Model_B_Deep_Dropout")
-    model.add(layers.Input(shape=(input_shape,)))
-    model.add(layers.Dense(64, activation="tanh", name="dense_64_tanh"))
-    model.add(layers.Dropout(0.3, name="dropout_0.3"))
-    model.add(layers.Dense(32, activation="tanh", name="dense_32_tanh"))
-    model.add(layers.Dense(num_classes, activation="softmax", name="output_softmax"))
-    return model
-
-
-def compile_and_train(
-    model, X_train, y_train, X_val, y_val, epochs, batch_size, lr, model_tag
-):
-    opt = optimizers.Adam(learning_rate=lr)
-    model.compile(optimizer=opt, loss="categorical_crossentropy", metrics=["accuracy"])
-
-    log_dir = f"logs/{model_tag}"
-    tb_cb = callbacks.TensorBoard(log_dir=log_dir, histogram_freq=0)
-    es = callbacks.EarlyStopping(
-        monitor="val_loss", patience=20, restore_best_weights=True
-    )
-    chk = callbacks.ModelCheckpoint(
-        f"best_{model_tag}.h5", save_best_only=True, monitor="val_accuracy"
-    )
-
-    history = model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_val, y_val),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=[tb_cb, es, chk],
-        verbose=2,
-    )
-    return history
-
-
-def plot_history(histories, filename="training_curves.png"):
-    plt.figure(figsize=(10, 4))
-
-    plt.subplot(1, 2, 1)
-    for name, h in histories.items():
-        plt.plot(h.history["accuracy"], label=f"{name} train")
-        plt.plot(h.history["val_accuracy"], "--", label=f"{name} val")
-        plt.title("Accuracy")
-        plt.xlabel("epoch")
-        plt.legend()
-
-    plt.subplot(1, 2, 2)
-    for name, h in histories.items():
-        plt.plot(h.history["loss"], label=f"{name} train")
-        plt.plot(h.history["val_loss"], "--", label=f"{name} val")
-        plt.title("Loss")
-        plt.xlabel("epoch")
-        plt.legend()
-
-    plt.tight_layout()
-    plt.savefig(filename)
-    print(f"Zapisano wykresy do {filename}")
-
-
-def predict_from_features(model_path, scaler, features):
-    arr = np.array(features, dtype=np.float32).reshape(1, -1)
-    arr_scaled = scaler.transform(arr)
-    model = tf.keras.models.load_model(model_path)
-    probs = model.predict(arr_scaled)
-    cls = np.argmax(probs, axis=1)[0]
-    return cls + 1, probs[0]
-
-
-def main(args):
-    if args.predict:
-        if not os.path.exists("best_model_used_for_prediction.h5"):
-            raise FileNotFoundError(
-                "Brak zapisanego modelu 'best_model_used_for_prediction.h5'. Uruchom trening."
-            )
-    if not os.path.exists("scaler.npy"):
-        raise FileNotFoundError(
-            "Brak zapisanego scaler'a 'scaler.npy'. Uruchom trening."
-        )
-    scaler = np.load("scaler.npy", allow_pickle=True).item()
-
-    features = args.features
-    if features is None or len(features) != NUM_FEATURES:
-        raise ValueError(
-            f"Podaj dokładnie {NUM_FEATURES} wartości cech przez --features"
-        )
-    cls, probs = predict_from_features(
-        "best_model_used_for_prediction.h5", scaler, features
-    )
-    print(f"Przewidywana klasa wina: {cls}")
-    print(f"Prawdopodobieństwa klas: {probs}")
-    return
-
-    # Trening
-    df = load_csv()
-    X, y_oh, scaler = prepare_dataset(df)
-
+def make_one_hot_and_split(df, test_size=0.2, random_state=42):
+    """Take dataframe with 'class' column, return X_train, X_test, y_train, y_test, scaler placeholder."""
+    y = pd.get_dummies(df["class"]).astype(int)
+    X = df.drop(columns=["class"])
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y_oh, test_size=0.2, random_state=42, stratify=y_oh
+        X, y, test_size=test_size, random_state=random_state, stratify=y
     )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=123, stratify=y_train
-    )
+    return X_train, X_test, y_train, y_test
 
-    print(
-        f"Rozmiary: X_train={X_train.shape}, X_val={X_val.shape}, X_test={X_test.shape}"
-    )
+def fit_scaler_and_transform(X_train):
+    """Fit StandardScaler on X_train and return (scaler, X_train_transformed)"""
+    scaler = StandardScaler()
+    X_train_t = scaler.fit_transform(X_train)
+    return scaler, X_train_t
 
-    model_a = build_model_a(NUM_FEATURES, num_classes=3)
-    model_b = build_model_b(NUM_FEATURES, num_classes=3)
+def transform_with_scaler(scaler, X):
+    return scaler.transform(X)
 
-    model_a.summary()
-    model_b.summary()
+# -----------------------
+# Model builder functions
+# -----------------------
+def build_model_simple(input_dim=13, learning_rate=0.001):
+    """Small model similar to 'first'"""
+    model = Sequential([
+        layers.Input(shape=(input_dim,), name="input"),
+        layers.Dense(32, activation="relu", name="hidden_1"),
+        layers.Dense(3, activation="softmax", name="output")
+    ])
+    model.compile(optimizer=Adam(learning_rate=learning_rate),
+                  loss="categorical_crossentropy",
+                  metrics=["accuracy"])
+    return model
 
-    histories = {}
-    hist_a = compile_and_train(
-        model_a,
-        X_train,
-        y_train,
-        X_val,
-        y_val,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        model_tag="model_a",
-    )
-    histories["Model_A"] = hist_a
+def build_model_deep(input_dim=13, learning_rate=0.001):
+    """Deeper model similar to 'second' but with slightly different layout (still many layers)."""
+    model = Sequential([
+        layers.Input(shape=(input_dim,), name="input"),
+        layers.Dense(256, activation="relu", kernel_initializer="HeNormal", name="h1"),
+        layers.Dense(128, activation="relu", kernel_initializer="HeNormal", name="h2"),
+        layers.Dense(64, activation="relu", kernel_initializer="HeNormal", name="h3"),
+        layers.Dense(32, activation="relu", kernel_initializer="HeNormal", name="h4"),
+        layers.Dense(16, activation="relu", kernel_initializer="HeNormal", name="h5"),
+        layers.Dropout(0.2, name="dropout"),
+        layers.Dense(3, activation="softmax", name="output"),
+    ])
+    model.compile(optimizer=Adam(learning_rate=learning_rate),
+                  loss="categorical_crossentropy",
+                  metrics=["accuracy"])
+    return model
 
-    hist_b = compile_and_train(
-        model_b,
-        X_train,
-        y_train,
-        X_val,
-        y_val,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        model_tag="model_b",
-    )
-    histories["Model_B"] = hist_b
+# -----------------------
+# Training / saving / loading functions
+# -----------------------
+def train_and_save_model(name, model_builder_fn, X_train, y_train,
+                         recalc=True, batch_size=32, epochs=10, learning_rate=0.001):
+    """
+    If model file exists and recalc is False -> load and return model.
+    Otherwise train new model and save it as <name>_model.keras
+    """
+    model_path = Path(f"./saved/{name}_model.keras")
+    if model_path.exists() and not recalc:
+        print(f"Loading existing model from {model_path}")
+        return tf.keras.models.load_model(model_path)
+    print(f"Training model '{name}' (epochs={epochs}, batch_size={batch_size}, lr={learning_rate})...")
+    model = model_builder_fn(learning_rate=learning_rate)
+    history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2)
+    plot_history_simple(history.history, batch_size=batch_size, epochs=epochs,
+                        learning_rate=learning_rate, name=name)
+    model.save(model_path)
+    print(f"Saved model to {model_path}")
+    return model
 
-    best_a = (
-        tf.keras.models.load_model("best_model_a.h5")
-        if os.path.exists("best_model_a.h5")
-        else model_a
-    )
-    best_b = (
-        tf.keras.models.load_model("best_model_b.h5")
-        if os.path.exists("best_model_b.h5")
-        else model_b
-    )
+# -----------------------
+# Plotting
+# -----------------------
+def plot_history_simple(history_dict, batch_size, epochs, learning_rate, name, loc="upper right"):
+    """
+    Save two images: {name}_accuracy_curve.png and {name}_loss_curve.png
+    history_dict is expected to contain keys 'accuracy' and 'loss' (Keras history.history)
+    """
+    # accuracy
+    fig, ax = plt.subplots(constrained_layout=True)
+    ax.plot(history_dict.get("accuracy", []), label="Accuracy (train)")
+    if "val_accuracy" in history_dict:
+        ax.plot(history_dict["val_accuracy"], linestyle="--", label="Accuracy (val)")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
+    text = f"batch={batch_size}\nlr={learning_rate}\nepochs={epochs}"
+    at = AnchoredText(text, loc=loc, prop={"family":"monospace"})
+    at.patch.set_facecolor("white")
+    at.patch.set_alpha(0.9)
+    ax.add_artist(at)
+    ax.legend()
+    fig.savefig(f"saved/{name}_accuracy_curve.png", dpi=150)
+    plt.close(fig)
 
-    loss_a, acc_a = best_a.evaluate(X_test, y_test, verbose=0)
-    loss_b, acc_b = best_b.evaluate(X_test, y_test, verbose=0)
+    # loss
+    fig, ax = plt.subplots(constrained_layout=True)
+    ax.plot(history_dict.get("loss", []), label="Loss (train)")
+    if "val_loss" in history_dict:
+        ax.plot(history_dict["val_loss"], linestyle="--", label="Loss (val)")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_ylim(0, max(1.0, max(history_dict.get("loss", [1.0])) * 1.1))
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
+    at = AnchoredText(text, loc=loc, prop={"family":"monospace"})
+    at.patch.set_facecolor("white")
+    at.patch.set_alpha(0.9)
+    ax.add_artist(at)
+    ax.legend()
+    fig.savefig(f"saved/{name}_loss_curve.png", dpi=150)
+    plt.close(fig)
+    print(f"Saved curves: {name}_accuracy_curve.png, {name}_loss_curve.png")
 
-    print(
-        f"Test results:\n Model_A - loss={loss_a:.4f}, acc={acc_a:.4f}\n Model_B - loss={loss_b:.4f}, acc={acc_b:.4f}"
-    )
+# -----------------------
+# Prediction helpers
+# -----------------------
+def args_to_feature_vector(args):
+    """Collect 13 feature args in expected order and return list"""
+    order = [
+        "alcohol", "malic_acid", "ash", "alcalinity_of_ash", "magnesium",
+        "total_phenols", "flavanoids", "nonflavanoid_phenols",
+        "proanthocyanins", "color_intensity", "hue", "od_diluted_wines", "proline"
+    ]
+    # If malic_acid unused, we include it because the provided classmate had it; keep order consistent.
+    vec = []
+    for key in order:
+        val = getattr(args, key, None)
+        if val is None:
+            raise ValueError(f"Missing argument: --{key.replace('_','-')}")
+        vec.append(float(val))
+    return np.array(vec, dtype=np.float32).reshape(1, -1)
 
-    if acc_a >= acc_b:
-        chosen_model = best_a
-        chosen_name = "Model_A"
-        chosen_acc = acc_a
+def predict_one_sample(model, scaler, feature_vector):
+    scaled = scaler.transform(feature_vector)
+    probs = model.predict(scaled, verbose=0)[0]
+    pred = int(np.argmax(probs)) + 1
+    return pred, probs
+
+# -----------------------
+# Main orchestration
+# -----------------------
+def main(parsed_args):
+    # 1) load, prepare, split
+    df = load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42)
+    X_train_raw, X_test_raw, y_train, y_test = make_one_hot_and_split(df, test_size=0.2, random_state=42)
+    scaler, X_train = fit_scaler_and_transform(X_train_raw)
+    X_test = transform_with_scaler(scaler, X_test_raw)
+
+    # 2) select model builder
+    model_name = parsed_args.model
+    if model_name == "first":
+        builder = build_model_simple
+    elif model_name == "second":
+        builder = build_model_deep
     else:
-        chosen_model = best_b
-        chosen_name = "Model_B"
-        chosen_acc = acc_b
+        raise ValueError("Unknown model name; choose 'first' or 'second'")
 
-    chosen_model.save("best_model_used_for_prediction.h5")
-    np.save("scaler.npy", scaler)
-
-    plot_history(histories, filename="training_curves.png")
-
-    with open("train_report.txt", "w") as f:
-        f.write(f"Model wybrany: {chosen_name}\n")
-    f.write(f"Test accuracy A: {acc_a:.4f}\n")
-    f.write(f"Test accuracy B: {acc_b:.4f}\n")
-    f.write(f"Wybrany accuracy: {chosen_acc:.4f}\n")
-
-    print(
-        "Trening zakończony. Zapisano: best_model_used_for_prediction.h5, scaler.npy, training_curves.png, train_report.txt"
+    # 3) train or load
+    model = train_and_save_model(
+        name=model_name,
+        model_builder_fn=builder,
+        X_train=X_train,
+        y_train=y_train,
+        recalc=parsed_args.recalc,
+        batch_size=parsed_args.batch_size,
+        epochs=parsed_args.epochs,
+        learning_rate=parsed_args.lr
     )
 
+    # 4) if predict flag provided -> run single-sample prediction using CLI-provided feature flags
+    if parsed_args.predict:
+        feat_vec = args_to_feature_vector(parsed_args)
+        pred_class, probs = predict_one_sample(model, scaler, feat_vec)
+        print("Predicted class:", pred_class)
+        print("Class probabilities:", probs)
 
+    # 5) report quick test-set accuracy (optional)
+    loss, acc = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Test set -> loss: {loss:.4f}, acc: {acc:.4f}")
+
+# -----------------------
+# CLI
+# -----------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Trening i predykcja modeli klasyfikacji win (UCI)."
-    )
-    parser.add_argument(
-        "--train",
-        action="store_true",
-        help="Uruchom trening (domyślnie jeśli brak --predict)",
-    )
-    parser.add_argument(
-        "--predict",
-        action="store_true",
-        help="Wykonaj predykcję na podstawie podanych cech",
-    )
-    parser.add_argument(
-        "--features",
-        nargs="+",
-        type=float,
-        help=f"Lista {NUM_FEATURES} cech dla predykcji",
-    )
-    parser.add_argument("--epochs", type=int, default=120)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="second", choices=["first", "second"],
+                        help="Which model to build/train/load")
+    parser.add_argument("--recalc", action="store_true",
+                        help="If set, force retraining even if saved model exists")
+    parser.add_argument("--predict", action="store_true", help="Run one-sample prediction using provided features")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.001)
+
+    # 13 feature args (keeps similar names to classmate)
+    parser.add_argument("--malic-acid", dest="malic_acid", type=float, default=0.0)
+    parser.add_argument("--alcohol", type=float, default=0.0)
+    parser.add_argument("--ash", type=float, default=0.0)
+    parser.add_argument("--alcalinity-of-ash", dest="alcalinity_of_ash", type=float, default=0.0)
+    parser.add_argument("--magnesium", type=float, default=0.0)
+    parser.add_argument("--total-phenols", dest="total_phenols", type=float, default=0.0)
+    parser.add_argument("--flavanoids", type=float, default=0.0)
+    parser.add_argument("--nonflavanoid-phenols", dest="nonflavanoid_phenols", type=float, default=0.0)
+    parser.add_argument("--proanthocyanins", type=float, default=0.0)
+    parser.add_argument("--color-intensity", dest="color_intensity", type=float, default=0.0)
+    parser.add_argument("--hue", type=float, default=0.0)
+    parser.add_argument("--od-diluted-wines", dest="od_diluted_wines", type=float, default=0.0)
+    parser.add_argument("--proline", type=float, default=0.0)
+
     args = parser.parse_args()
-
-    if not args.predict:
-        args.train = True
-
     main(args)
