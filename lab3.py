@@ -26,14 +26,16 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
-import sklearn
+import joblib
+
 
 # -----------------------
 # Data functions
 # -----------------------
 def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42):
     """Load CSV, assume first column 'class' or headerless with class first.
-       Returns pandas DataFrame with 'class' column if detected, and rest numeric columns."""
+    Returns pandas DataFrame with 'class' column if detected, and rest numeric columns.
+    """
     df = pd.read_csv(path)
     # If headerless (original UCI), the file may have no header. Try to detect:
     if df.columns[0] != "class" and df.shape[1] == 14:
@@ -41,9 +43,12 @@ def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42):
         cols = ["class"] + [f"f{i}" for i in range(1, 14)]
         df.columns = cols
     if "class" not in df.columns:
-        raise ValueError("CSV must contain class in first column or header named 'class'.")
+        raise ValueError(
+            "CSV must contain class in first column or header named 'class'."
+        )
     df = df.sample(frac=1, random_state=random_state).reset_index(drop=True)
     return df
+
 
 def make_one_hot_and_split(df, test_size=0.2, random_state=42):
     """Take dataframe with 'class' column, return X_train, X_test, y_train, y_test, scaler placeholder."""
@@ -54,52 +59,89 @@ def make_one_hot_and_split(df, test_size=0.2, random_state=42):
     )
     return X_train, X_test, y_train, y_test
 
+
 def fit_scaler_and_transform(X_train):
     """Fit StandardScaler on X_train and return (scaler, X_train_transformed)"""
-    scaler = StandardScaler()
+    scaler_exists = Path(f"./saved/scaler.pk1").exists()
+
+    scaler = (
+        StandardScaler() if not scaler_exists else joblib.load(f"./saved/scaler.pk1")
+    )
     X_train_t = scaler.fit_transform(X_train)
+    if not scaler_exists:
+        joblib.dump(scaler, f"./saved/scaler.pk1")
     return scaler, X_train_t
+
 
 def transform_with_scaler(scaler, X):
     return scaler.transform(X)
+
 
 # -----------------------
 # Model builder functions
 # -----------------------
 def build_model_simple(input_dim=13, learning_rate=0.001):
     """Small model similar to 'first'"""
-    model = Sequential([
-        layers.Input(shape=(input_dim,), name="input"),
-        layers.Dense(32, activation="relu", name="hidden_1"),
-        layers.Dense(3, activation="softmax", name="output")
-    ])
-    model.compile(optimizer=Adam(learning_rate=learning_rate),
-                  loss="categorical_crossentropy",
-                  metrics=["accuracy"])
+    model = Sequential(
+        [
+            layers.Input(shape=(input_dim,), name="input"),
+            layers.Dense(32, activation="relu", name="hidden_1"),
+            layers.Dense(3, activation="softmax", name="output"),
+        ]
+    )
+    model.compile(
+        optimizer=Adam(learning_rate=learning_rate),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
     return model
+
 
 def build_model_deep(input_dim=13, learning_rate=0.001):
     """Deeper model similar to 'second' but with slightly different layout (still many layers)."""
-    model = Sequential([
-        layers.Input(shape=(input_dim,), name="input"),
-        layers.Dense(256, activation="relu", kernel_initializer="HeNormal", name="h1"),
-        layers.Dense(128, activation="relu", kernel_initializer="HeNormal", name="h2"),
-        layers.Dense(64, activation="relu", kernel_initializer="HeNormal", name="h3"),
-        layers.Dense(32, activation="relu", kernel_initializer="HeNormal", name="h4"),
-        layers.Dense(16, activation="relu", kernel_initializer="HeNormal", name="h5"),
-        layers.Dropout(0.2, name="dropout"),
-        layers.Dense(3, activation="softmax", name="output"),
-    ])
-    model.compile(optimizer=Adam(learning_rate=learning_rate),
-                  loss="categorical_crossentropy",
-                  metrics=["accuracy"])
+    model = Sequential(
+        [
+            layers.Input(shape=(input_dim,), name="input"),
+            layers.Dense(
+                256, activation="relu", kernel_initializer="HeNormal", name="h1"
+            ),
+            layers.Dense(
+                128, activation="relu", kernel_initializer="HeNormal", name="h2"
+            ),
+            layers.Dense(
+                64, activation="relu", kernel_initializer="HeNormal", name="h3"
+            ),
+            layers.Dense(
+                32, activation="relu", kernel_initializer="HeNormal", name="h4"
+            ),
+            layers.Dense(
+                16, activation="relu", kernel_initializer="HeNormal", name="h5"
+            ),
+            layers.Dropout(0.2, name="dropout"),
+            layers.Dense(3, activation="softmax", name="output"),
+        ]
+    )
+    model.compile(
+        optimizer=Adam(learning_rate=learning_rate),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
     return model
+
 
 # -----------------------
 # Training / saving / loading functions
 # -----------------------
-def train_and_save_model(name, model_builder_fn, X_train, y_train,
-                         recalc=True, batch_size=32, epochs=10, learning_rate=0.001):
+def train_and_save_model(
+    name,
+    model_builder_fn,
+    X_train,
+    y_train,
+    recalc=True,
+    batch_size=32,
+    epochs=10,
+    learning_rate=0.001,
+):
     """
     If model file exists and recalc is False -> load and return model.
     Otherwise train new model and save it as <name>_model.keras
@@ -108,19 +150,31 @@ def train_and_save_model(name, model_builder_fn, X_train, y_train,
     if model_path.exists() and not recalc:
         print(f"Loading existing model from {model_path}")
         return tf.keras.models.load_model(model_path)
-    print(f"Training model '{name}' (epochs={epochs}, batch_size={batch_size}, lr={learning_rate})...")
+    print(
+        f"Training model '{name}' (epochs={epochs}, batch_size={batch_size}, lr={learning_rate})..."
+    )
     model = model_builder_fn(learning_rate=learning_rate)
-    history = model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2)
-    plot_history_simple(history.history, batch_size=batch_size, epochs=epochs,
-                        learning_rate=learning_rate, name=name)
+    history = model.fit(
+        X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2
+    )
+    plot_history_simple(
+        history.history,
+        batch_size=batch_size,
+        epochs=epochs,
+        learning_rate=learning_rate,
+        name=name,
+    )
     model.save(model_path)
     print(f"Saved model to {model_path}")
     return model
 
+
 # -----------------------
 # Plotting
 # -----------------------
-def plot_history_simple(history_dict, batch_size, epochs, learning_rate, name, loc="upper right"):
+def plot_history_simple(
+    history_dict, batch_size, epochs, learning_rate, name, loc="upper right"
+):
     """
     Save two images: {name}_accuracy_curve.png and {name}_loss_curve.png
     history_dict is expected to contain keys 'accuracy' and 'loss' (Keras history.history)
@@ -135,7 +189,7 @@ def plot_history_simple(history_dict, batch_size, epochs, learning_rate, name, l
     ax.set_ylim(0, 1.05)
     ax.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     text = f"batch={batch_size}\nlr={learning_rate}\nepochs={epochs}"
-    at = AnchoredText(text, loc=loc, prop={"family":"monospace"})
+    at = AnchoredText(text, loc=loc, prop={"family": "monospace"})
     at.patch.set_facecolor("white")
     at.patch.set_alpha(0.9)
     ax.add_artist(at)
@@ -152,7 +206,7 @@ def plot_history_simple(history_dict, batch_size, epochs, learning_rate, name, l
     ax.set_ylabel("Loss")
     ax.set_ylim(0, max(1.0, max(history_dict.get("loss", [1.0])) * 1.1))
     ax.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    at = AnchoredText(text, loc=loc, prop={"family":"monospace"})
+    at = AnchoredText(text, loc=loc, prop={"family": "monospace"})
     at.patch.set_facecolor("white")
     at.patch.set_alpha(0.9)
     ax.add_artist(at)
@@ -161,15 +215,26 @@ def plot_history_simple(history_dict, batch_size, epochs, learning_rate, name, l
     plt.close(fig)
     print(f"Saved curves: {name}_accuracy_curve.png, {name}_loss_curve.png")
 
+
 # -----------------------
 # Prediction helpers
 # -----------------------
 def args_to_feature_vector(args):
     """Collect 13 feature args in expected order and return list"""
     order = [
-        "alcohol", "malic_acid", "ash", "alcalinity_of_ash", "magnesium",
-        "total_phenols", "flavanoids", "nonflavanoid_phenols",
-        "proanthocyanins", "color_intensity", "hue", "od_diluted_wines", "proline"
+        "alcohol",
+        "malic_acid",
+        "ash",
+        "alcalinity_of_ash",
+        "magnesium",
+        "total_phenols",
+        "flavanoids",
+        "nonflavanoid_phenols",
+        "proanthocyanins",
+        "color_intensity",
+        "hue",
+        "od_diluted_wines",
+        "proline",
     ]
     # If malic_acid unused, we include it because the provided classmate had it; keep order consistent.
     vec = []
@@ -180,11 +245,13 @@ def args_to_feature_vector(args):
         vec.append(float(val))
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
+
 def predict_one_sample(model, scaler, feature_vector):
     scaled = scaler.transform(feature_vector)
     probs = model.predict(scaled, verbose=0)[0]
     pred = int(np.argmax(probs)) + 1
     return pred, probs
+
 
 # -----------------------
 # Main orchestration
@@ -192,7 +259,9 @@ def predict_one_sample(model, scaler, feature_vector):
 def main(parsed_args):
     # 1) load, prepare, split
     df = load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42)
-    X_train_raw, X_test_raw, y_train, y_test = make_one_hot_and_split(df, test_size=0.2, random_state=42)
+    X_train_raw, X_test_raw, y_train, y_test = make_one_hot_and_split(
+        df, test_size=0.2, random_state=42
+    )
     scaler, X_train = fit_scaler_and_transform(X_train_raw)
     X_test = transform_with_scaler(scaler, X_test_raw)
 
@@ -214,7 +283,7 @@ def main(parsed_args):
         recalc=parsed_args.recalc,
         batch_size=parsed_args.batch_size,
         epochs=parsed_args.epochs,
-        learning_rate=parsed_args.lr
+        learning_rate=parsed_args.lr,
     )
 
     # 4) if predict flag provided -> run single-sample prediction using CLI-provided feature flags
@@ -228,16 +297,29 @@ def main(parsed_args):
     loss, acc = model.evaluate(X_test, y_test, verbose=0)
     print(f"Test set -> loss: {loss:.4f}, acc: {acc:.4f}")
 
+
 # -----------------------
 # CLI
 # -----------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="second", choices=["first", "second"],
-                        help="Which model to build/train/load")
-    parser.add_argument("--recalc", action="store_true",
-                        help="If set, force retraining even if saved model exists")
-    parser.add_argument("--predict", action="store_true", help="Run one-sample prediction using provided features")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="second",
+        choices=["first", "second"],
+        help="Which model to build/train/load",
+    )
+    parser.add_argument(
+        "--recalc",
+        action="store_true",
+        help="If set, force retraining even if saved model exists",
+    )
+    parser.add_argument(
+        "--predict",
+        action="store_true",
+        help="Run one-sample prediction using provided features",
+    )
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -246,15 +328,25 @@ if __name__ == "__main__":
     parser.add_argument("--malic-acid", dest="malic_acid", type=float, default=0.0)
     parser.add_argument("--alcohol", type=float, default=0.0)
     parser.add_argument("--ash", type=float, default=0.0)
-    parser.add_argument("--alcalinity-of-ash", dest="alcalinity_of_ash", type=float, default=0.0)
+    parser.add_argument(
+        "--alcalinity-of-ash", dest="alcalinity_of_ash", type=float, default=0.0
+    )
     parser.add_argument("--magnesium", type=float, default=0.0)
-    parser.add_argument("--total-phenols", dest="total_phenols", type=float, default=0.0)
+    parser.add_argument(
+        "--total-phenols", dest="total_phenols", type=float, default=0.0
+    )
     parser.add_argument("--flavanoids", type=float, default=0.0)
-    parser.add_argument("--nonflavanoid-phenols", dest="nonflavanoid_phenols", type=float, default=0.0)
+    parser.add_argument(
+        "--nonflavanoid-phenols", dest="nonflavanoid_phenols", type=float, default=0.0
+    )
     parser.add_argument("--proanthocyanins", type=float, default=0.0)
-    parser.add_argument("--color-intensity", dest="color_intensity", type=float, default=0.0)
+    parser.add_argument(
+        "--color-intensity", dest="color_intensity", type=float, default=0.0
+    )
     parser.add_argument("--hue", type=float, default=0.0)
-    parser.add_argument("--od-diluted-wines", dest="od_diluted_wines", type=float, default=0.0)
+    parser.add_argument(
+        "--od-diluted-wines", dest="od_diluted_wines", type=float, default=0.0
+    )
     parser.add_argument("--proline", type=float, default=0.0)
 
     args = parser.parse_args()
