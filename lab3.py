@@ -14,25 +14,30 @@ Usage (train & predict example):
   python wine_methods_only.py --recalc --model second --epochs 15 --batch_size 32 --lr 0.001
   python wine_methods_only.py --predict --alcohol 13.2 --malic-acid 1.78 ... --proline 1050
 """
+import os
 from pathlib import Path
 import argparse
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras import Sequential
-from tensorflow.keras import layers
-from tensorflow.keras.optimizers import Adam
+from keras import Sequential
+from keras import layers
+from keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
+import keras_tuner as kt
 import joblib
+import json
+
+RANDOM_SEED = 42
 
 
 # -----------------------
 # Data functions
 # -----------------------
-def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42):
+def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=RANDOM_SEED):
     """Load CSV, assume first column 'class' or headerless with class first.
     Returns pandas DataFrame with 'class' column if detected, and rest numeric columns.
     """
@@ -50,7 +55,7 @@ def load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42):
     return df
 
 
-def make_one_hot_and_split(df, test_size=0.2, random_state=42):
+def make_one_hot_and_split(df, test_size=0.2, random_state=RANDOM_SEED):
     """Take dataframe with 'class' column, return X_train, X_test, y_train, y_test, scaler placeholder."""
     y = pd.get_dummies(df["class"]).astype(int)
     X = df.drop(columns=["class"])
@@ -77,14 +82,21 @@ def transform_with_scaler(scaler, X):
     return scaler.transform(X)
 
 
+def normalize_data(X_train):
+    train_normalizer = layers.Normalization(axis=1)
+    train_normalizer.adapt(np.array(X_train))
+    return train_normalizer
+
+
 # -----------------------
 # Model builder functions
 # -----------------------
-def build_model_simple(input_dim=13, learning_rate=0.001):
+def build_model_simple(normalizer, input_dim=13, learning_rate=0.001):
     """Small model similar to 'first'"""
     model = Sequential(
         [
             layers.Input(shape=(input_dim,), name="input"),
+            normalizer,
             layers.Dense(32, activation="relu", name="hidden_1"),
             layers.Dense(3, activation="softmax", name="output"),
         ]
@@ -97,11 +109,12 @@ def build_model_simple(input_dim=13, learning_rate=0.001):
     return model
 
 
-def build_model_deep(input_dim=13, learning_rate=0.001):
+def build_model_deep(normalizer, input_dim=13, learning_rate=0.001):
     """Deeper model similar to 'second' but with slightly different layout (still many layers)."""
     model = Sequential(
         [
             layers.Input(shape=(input_dim,), name="input"),
+            normalizer,
             layers.Dense(
                 256, activation="relu", kernel_initializer="HeNormal", name="h1"
             ),
@@ -129,6 +142,64 @@ def build_model_deep(input_dim=13, learning_rate=0.001):
     return model
 
 
+def build_model_hyper(
+    X_train, y_train, X_test, y_test, normalizer, input_dim=13, learning_rate=0.001
+):
+
+    def hyper_build(hp: kt.HyperParameters):
+        model = Sequential()
+        model.add(layers.Input(shape=(input_dim,), name="input"))
+        model.add(normalizer)
+        model.add(
+            layers.Dense(
+                hp.Int("units_1", min_value=16, max_value=256, step=16),
+                activation="relu",
+                name="hidden_1",
+            )
+        )
+        if hp.Boolean("use_dropout"):
+            model.add(layers.Dropout(0.2, name="dropout"))
+        model.add(
+            layers.Dense(
+                3,
+                activation="softmax",
+                name="output",
+            )
+        )
+        model.compile(
+            optimizer=Adam(
+                learning_rate=hp.Float(
+                    "lr", min_value=0.00001, max_value=0.1, sampling="log"
+                )
+            ),
+            loss="categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+        return model
+
+    tuner = kt.BayesianOptimization(
+        hypermodel=hyper_build,
+        objective="val_accuracy",
+        max_trials=10,
+        seed=RANDOM_SEED,
+        directory="saved",
+    )
+
+    tuner.search_space_summary()
+
+    tuner.search(X_train, y_train, epochs=4, validation_data=(X_test, y_test))
+
+    best_model = tuner.get_best_models(num_models=1)[0]
+    best_params: kt.HyperParameters = tuner.get_best_hyperparameters(num_trials=1)[0]
+
+    best_model.summary()
+
+    with open(f"saved/best_hparams.json", "w") as f:
+        json.dump(best_params.values, f, indent=2)
+
+    return best_model
+
+
 # -----------------------
 # Training / saving / loading functions
 # -----------------------
@@ -137,6 +208,9 @@ def train_and_save_model(
     model_builder_fn,
     X_train,
     y_train,
+    X_test,
+    y_test,
+    normalizer,
     recalc=True,
     batch_size=32,
     epochs=10,
@@ -153,7 +227,14 @@ def train_and_save_model(
     print(
         f"Training model '{name}' (epochs={epochs}, batch_size={batch_size}, lr={learning_rate})..."
     )
-    model = model_builder_fn(learning_rate=learning_rate)
+    model = model_builder_fn(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        normalizer=normalizer,
+        learning_rate=learning_rate,
+    )
     history = model.fit(
         X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2
     )
@@ -246,9 +327,8 @@ def args_to_feature_vector(args):
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
 
-def predict_one_sample(model, scaler, feature_vector):
-    scaled = scaler.transform(feature_vector)
-    probs = model.predict(scaled, verbose=0)[0]
+def predict_one_sample(model, feature_vector):
+    probs = model.predict(feature_vector, verbose=0)[0]
     pred = int(np.argmax(probs)) + 1
     return pred, probs
 
@@ -258,12 +338,10 @@ def predict_one_sample(model, scaler, feature_vector):
 # -----------------------
 def main(parsed_args):
     # 1) load, prepare, split
-    df = load_and_shuffle_csv(path="public_resources/wine.csv", random_state=42)
-    X_train_raw, X_test_raw, y_train, y_test = make_one_hot_and_split(
-        df, test_size=0.2, random_state=42
-    )
-    scaler, X_train = fit_scaler_and_transform(X_train_raw)
-    X_test = transform_with_scaler(scaler, X_test_raw)
+    df = load_and_shuffle_csv(path="public_resources/wine.csv")
+    X_train, X_test, y_train, y_test = make_one_hot_and_split(df, test_size=0.2)
+    # scaler, X_train = fit_scaler_and_transform(X_train_raw)
+    normalizer = normalize_data(X_train)
 
     # 2) select model builder
     model_name = parsed_args.model
@@ -271,6 +349,8 @@ def main(parsed_args):
         builder = build_model_simple
     elif model_name == "second":
         builder = build_model_deep
+    elif model_name == "hyper":
+        builder = build_model_hyper
     else:
         raise ValueError("Unknown model name; choose 'first' or 'second'")
 
@@ -280,16 +360,19 @@ def main(parsed_args):
         model_builder_fn=builder,
         X_train=X_train,
         y_train=y_train,
+        X_test=X_test,
+        y_test=y_test,
         recalc=parsed_args.recalc,
         batch_size=parsed_args.batch_size,
         epochs=parsed_args.epochs,
         learning_rate=parsed_args.lr,
+        normalizer=normalizer,
     )
 
     # 4) if predict flag provided -> run single-sample prediction using CLI-provided feature flags
     if parsed_args.predict:
         feat_vec = args_to_feature_vector(parsed_args)
-        pred_class, probs = predict_one_sample(model, scaler, feat_vec)
+        pred_class, probs = predict_one_sample(model, feat_vec)
         print("Predicted class:", pred_class)
         print("Class probabilities:", probs)
 
@@ -307,7 +390,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="second",
-        choices=["first", "second"],
+        choices=["first", "second", "hyper"],
         help="Which model to build/train/load",
     )
     parser.add_argument(
