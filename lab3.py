@@ -67,14 +67,14 @@ def make_one_hot_and_split(df, test_size=0.2, random_state=RANDOM_SEED):
 
 def fit_scaler_and_transform(X_train):
     """Fit StandardScaler on X_train and return (scaler, X_train_transformed)"""
-    scaler_exists = Path(f"./saved/scaler.pk1").exists()
+    scaler_exists = Path(f"saved/lab3/scaler.pk1").exists()
 
     scaler = (
-        StandardScaler() if not scaler_exists else joblib.load(f"./saved/scaler.pk1")
+        StandardScaler() if not scaler_exists else joblib.load(f"saved/lab3/scaler.pk1")
     )
     X_train_t = scaler.fit_transform(X_train)
     if not scaler_exists:
-        joblib.dump(scaler, f"./saved/scaler.pk1")
+        joblib.dump(scaler, f"saved/lab3/scaler.pk1")
     return scaler, X_train_t
 
 
@@ -194,7 +194,7 @@ def build_model_hyper(
 
     best_model.summary()
 
-    with open(f"saved/best_hparams.json", "w") as f:
+    with open(f"saved/lab3/best_hparams.json", "w") as f:
         json.dump(best_params.values, f, indent=2)
 
     return best_model
@@ -220,7 +220,7 @@ def train_and_save_model(
     If model file exists and recalc is False -> load and return model.
     Otherwise train new model and save it as <name>_model.keras
     """
-    model_path = Path(f"./saved/{name}_model.keras")
+    model_path = Path(f"./saved/lab3/{name}_model.keras")
     if model_path.exists() and not recalc:
         print(f"Loading existing model from {model_path}")
         return tf.keras.models.load_model(model_path)
@@ -275,7 +275,7 @@ def plot_history_simple(
     at.patch.set_alpha(0.9)
     ax.add_artist(at)
     ax.legend()
-    fig.savefig(f"saved/{name}_accuracy_curve.png", dpi=150)
+    fig.savefig(f"saved/lab3/{name}_accuracy_curve.png", dpi=150)
     plt.close(fig)
 
     # loss
@@ -292,7 +292,7 @@ def plot_history_simple(
     at.patch.set_alpha(0.9)
     ax.add_artist(at)
     ax.legend()
-    fig.savefig(f"saved/{name}_loss_curve.png", dpi=150)
+    fig.savefig(f"saved/lab3/{name}_loss_curve.png", dpi=150)
     plt.close(fig)
     print(f"Saved curves: {name}_accuracy_curve.png, {name}_loss_curve.png")
 

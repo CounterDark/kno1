@@ -2,7 +2,7 @@
 <project version="4">
   <component name="Black">
     <option name="enabledOnSave" value="true" />
-    <option name="sdkName" value="Python 3.13 (kno1)" />
+    <option name="sdkName" value="uv (kno1)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="uv (studia)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="uv (kno1)" project-jdk-type="Python SDK" />
 </project>
