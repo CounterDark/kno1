@@ -24,6 +24,7 @@ class ModelBuilder:
         self.use_tuner = use_tuner
         self.retrain = retrain
         self.model = None
+        self.tuner = None
         self.summary = None
         self.batch_size = 50
         self.epochs = 5
@@ -40,9 +41,14 @@ class ModelBuilder:
         )
 
     def load_or_build(self):
-        model = keras.saving.load_model(
+        model = None
+        if Path(
             self.path + f"/{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
-        )
+        ).exists():
+            model = keras.saving.load_model(
+                self.path
+                + f"/{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
+            )
         if self.retrain or model is None:
             self.build_model()
         else:
@@ -65,15 +71,93 @@ class ModelBuilder:
 
     def build_dense_hp(self, hp):
         print("building dense hp model")
+        model = keras.Sequential()
+        model.add(keras.layers.Input(shape=(28, 28), batch_size=self.batch_size))
+        model.add(keras.layers.Flatten())
+        for i in range(hp.Int("num_layers", 1, 3)):
+            model.add(
+                keras.layers.Dense(
+                    # Tune number of units separately.
+                    units=hp.Int(f"units_{i}", min_value=32, max_value=512, step=32),
+                    activation=hp.Choice("activation", ["relu", "tanh"]),
+                )
+            )
+        model.add(keras.layers.Dense(10, activation=tf.nn.softmax))
+        model.compile(
+            optimizer=Adam(learning_rate=self.learning_rate),
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+        return model
 
     def build_convoluted_hp(self, hp):
         print("building convoluted hp model")
+        model = keras.Sequential()
+        model.add(keras.layers.Input(shape=(28, 28, 1), batch_size=self.batch_size))
+        model.add(
+            keras.layers.Conv2D(
+                filters=hp.Int(
+                    f"filters_convoluted_1", min_value=32, max_value=128, step=16
+                ),
+                kernel_size=(3, 3),
+                activation="relu",
+            )
+        )
+        model.add(keras.layers.MaxPooling2D((2, 2)))
+        model.add(
+            keras.layers.Conv2D(
+                filters=hp.Int(
+                    f"filters_convoluted_2", min_value=64, max_value=256, step=32
+                ),
+                kernel_size=(3, 3),
+                activation="relu",
+            )
+        )
+        model.add(keras.layers.MaxPooling2D((2, 2)))
+        model.add(keras.layers.Flatten())
+        model.add(
+            keras.layers.Dense(
+                units=hp.Int(f"units_convoluted"),
+                min_value=16,
+                max_value=128,
+                step=16,
+                activation=tf.nn.relu,
+            )
+        )
+        model.add(keras.layers.Dense(10, activation="softmax"))
+
+        model.compile(
+            optimizer=Adam(learning_rate=self.learning_rate),
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+        return model
 
     def build_tuned_dense(self):
         print("Building tuned dense model...")
+        tuner = kt.Hyperband(
+            hypermodel=self.build_dense_hp,
+            objective="val_accuracy",
+            max_epochs=self.epochs,
+            hyperband_iterations=2,
+            overwrite=True,
+            directory=self.path,
+            project_name="dense_tuned",
+        )
+        self.tuner = tuner
 
     def build_tuned_convoluted(self):
         print("Building tuned convoluted model...")
+        tuner = kt.Hyperband(
+            hypermodel=self.build_convoluted_hp,
+            objective="val_accuracy",
+            max_epochs=self.epochs,
+            hyperband_iterations=2,
+            overwrite=True,
+            directory=self.path,
+            project_name="convoluted_tuned",
+        )
+        self.tuner = tuner
 
     def build_dense(self):
         print("Building dense model...")
@@ -127,6 +211,20 @@ class ModelBuilder:
 
     def train_tuned(self, X_train, X_test, y_train, y_test):
         print("Training tuned dense model...")
+        self.tuner.search(
+            x=X_train,
+            y=y_train,
+            epochs=self.epochs,
+            validation_data=(X_test, y_test),
+        )
+        best_params = self.tuner.get_best_hyperparameters(1)[0]
+        if self.model_type == "dense":
+            self.model = self.build_dense_hp(best_params)
+        else:
+            self.model = self.build_convoluted_hp(best_params)
+        x_all = np.concatenate((X_train, X_test))
+        y_all = np.concatenate((y_train, y_test))
+        self.history = self.model.fit(x_all, y_all, epochs=self.epochs, batch_size=self.batch_size)
 
     def train_simple(self, X_train, X_test, y_train, y_test):
         self.history = self.model.fit(
