@@ -37,9 +37,9 @@ class Autoencoder(Model):
             keras.Sequential(
                 [
                     layers.Input(shape=(128, 128, 3)),
+                    layers.Conv2D(256, 3, strides=2, padding="same", activation="relu"),
                     layers.Conv2D(128, 3, strides=2, padding="same", activation="relu"),
                     layers.Conv2D(64, 3, strides=2, padding="same", activation="relu"),
-                    layers.Conv2D(32, 3, strides=2, padding="same", activation="relu"),
                 ]
             )
             if encoder0 is None
@@ -49,15 +49,15 @@ class Autoencoder(Model):
             keras.Sequential(
                 [
                     layers.Conv2DTranspose(
-                        32, 3, strides=2, padding="same", activation="relu"
-                    ),
-                    layers.Conv2DTranspose(
                         64, 3, strides=2, padding="same", activation="relu"
                     ),
                     layers.Conv2DTranspose(
                         128, 3, strides=2, padding="same", activation="relu"
                     ),
-                    layers.Conv2D(1, 3, activation="sigmoid", padding="same"),
+                    layers.Conv2DTranspose(
+                        256, 3, strides=2, padding="same", activation="relu"
+                    ),
+                    layers.Conv2D(3, 3, activation="sigmoid", padding="same"),
                 ]
             )
             if decoder0 is None
@@ -94,7 +94,8 @@ except Exception as e:
 
 autoencoder = Autoencoder(latent_dim=2, encoder0=encoder, decoder0=decoder)
 autoencoder.compile(optimizer="adam", loss=losses.MeanSquaredError())
-dataset = load_data()
+o_dataset = load_data()
+dataset = o_dataset.concatenate(o_dataset)
 dataset = autoencoder.augment(dataset)
 
 if not do_not_fit:
