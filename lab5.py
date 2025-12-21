@@ -224,7 +224,9 @@ class ModelBuilder:
             self.model = self.build_convoluted_hp(best_params)
         x_all = np.concatenate((X_train, X_test))
         y_all = np.concatenate((y_train, y_test))
-        self.history = self.model.fit(x_all, y_all, epochs=self.epochs, batch_size=self.batch_size)
+        self.history = self.model.fit(
+            x_all, y_all, epochs=self.epochs, batch_size=self.batch_size
+        )
 
     def train_simple(self, X_train, X_test, y_train, y_test):
         self.history = self.model.fit(
