@@ -81,6 +81,10 @@ class Autoencoder(Model):
         decoded = self.decoder(encoded)
         return decoded
 
+    def save_models(self):
+        keras.models.save_model(self.encoder, "saved/lab6/model_encoder.keras")
+        keras.models.save_model(self.decoder, "saved/lab6/model_decoder.keras")
+
 
 try:
     encoder = keras.models.load_model("saved/lab6/model_encoder.keras")
@@ -92,7 +96,7 @@ except Exception as e:
     do_not_fit = False
     print(e)
 
-autoencoder = Autoencoder(latent_dim=2, encoder0=encoder, decoder0=decoder)
+autoencoder = Autoencoder(latent_dim=4, encoder0=encoder, decoder0=decoder)
 autoencoder.compile(optimizer="adam", loss=losses.MeanSquaredError())
 o_dataset = load_data()
 dataset = o_dataset.concatenate(o_dataset)
@@ -101,17 +105,20 @@ dataset = autoencoder.augment(dataset)
 if not do_not_fit:
     autoencoder.fit(
         dataset,
-        epochs=10,
+        epochs=100,
         shuffle=True,
     )
+
+# save models
+autoencoder.save_models()
 
 for batch in dataset.take(1):  # bierzemy pierwszy batch
     x_batch, y_batch = batch
     encoded_imgs = autoencoder.encoder(x_batch).numpy()
     decoded_imgs = autoencoder.decoder(encoded_imgs).numpy()
-    decoded_imgs_to_compare = autoencoder(x_batch).numpy()
+    # decoded_imgs_to_compare = autoencoder(x_batch).numpy()
 
     for i in range(len(x_batch)):
         save(x_batch[i], result=f"x_test_{i}.png")
         save(decoded_imgs[i], result=f"decoded_imgs_{i}.png")
-        save(decoded_imgs_to_compare[i], result=f"decoded_imgs_to_compare_{i}.png")
+        # save(decoded_imgs_to_compare[i], result=f"decoded_imgs_to_compare_{i}.png")
