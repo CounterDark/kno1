@@ -7,7 +7,9 @@ import keras_tuner as kt
 from keras.models import Model
 
 IMG_SIZE = 128
-BATCH_SIZE = 32
+BATCH_SIZE = 2
+
+RETRAINING = False
 
 
 def save(img, result="obrazek.png"):
@@ -40,6 +42,9 @@ class Autoencoder(Model):
                     layers.Conv2D(256, 3, strides=2, padding="same", activation="relu"),
                     layers.Conv2D(128, 3, strides=2, padding="same", activation="relu"),
                     layers.Conv2D(64, 3, strides=2, padding="same", activation="relu"),
+                    layers.Conv2D(32, 3, strides=2, padding="same", activation="relu"),
+                    layers.Flatten(),
+                    layers.Dense(self.latent_dim, activation="sigmoid"),
                 ]
             )
             if encoder0 is None
@@ -48,16 +53,10 @@ class Autoencoder(Model):
         self.decoder = (
             keras.Sequential(
                 [
-                    layers.Conv2DTranspose(
-                        64, 3, strides=2, padding="same", activation="relu"
-                    ),
-                    layers.Conv2DTranspose(
-                        128, 3, strides=2, padding="same", activation="relu"
-                    ),
-                    layers.Conv2DTranspose(
-                        256, 3, strides=2, padding="same", activation="relu"
-                    ),
-                    layers.Conv2D(3, 3, activation="sigmoid", padding="same"),
+                    layers.Input(shape=(self.latent_dim,)),  # latent_dim
+                    layers.Dense(32, activation="relu"),
+                    layers.Dense(128 * 128 * 3, activation="sigmoid"),
+                    layers.Reshape((128, 128, 3)),
                 ]
             )
             if decoder0 is None
@@ -86,17 +85,21 @@ class Autoencoder(Model):
         keras.models.save_model(self.decoder, "saved/lab6/model_decoder.keras")
 
 
-try:
-    encoder = keras.models.load_model("saved/lab6/model_encoder.keras")
-    decoder = keras.models.load_model("saved/lab6/model_decoder.keras")
-    do_not_fit = True
-except Exception as e:
-    encoder = None
-    decoder = None
-    do_not_fit = False
-    print(e)
+encoder = None
+decoder = None
+do_not_fit = False
+if not RETRAINING:
+    try:
+        encoder = keras.models.load_model("saved/lab6/model_encoder.keras")
+        decoder = keras.models.load_model("saved/lab6/model_decoder.keras")
+        do_not_fit = True
+    except Exception as e:
+        encoder = None
+        decoder = None
+        do_not_fit = False
+        print(e)
 
-autoencoder = Autoencoder(latent_dim=4, encoder0=encoder, decoder0=decoder)
+autoencoder = Autoencoder(latent_dim=8, encoder0=encoder, decoder0=decoder)
 autoencoder.compile(optimizer="adam", loss=losses.MeanSquaredError())
 o_dataset = load_data()
 dataset = o_dataset.concatenate(o_dataset)
@@ -105,12 +108,18 @@ dataset = autoencoder.augment(dataset)
 if not do_not_fit:
     autoencoder.fit(
         dataset,
-        epochs=100,
-        shuffle=True,
+        epochs=20,
+        shuffle=False,
+        batch_size=BATCH_SIZE,
     )
 
 # save models
 autoencoder.save_models()
+
+test_decoded = autoencoder.decoder(
+    np.array([[0.5, 0.4, 0.1, 0.0042, 0.91213, 0.2, 0.65, 0.666]])
+)
+save(test_decoded[0], "obrazek_test.png")
 
 for batch in dataset.take(1):  # bierzemy pierwszy batch
     x_batch, y_batch = batch
