@@ -17,6 +17,19 @@ import json
 
 RANDOM_SEED = 42
 
+CLASS_NAMES = {
+    0: "T-shirt/top",
+    1: "Trouser",
+    2: "Pullover",
+    3: "Dress",
+    4: "Coat",
+    5: "Sandal",
+    6: "Shirt",
+    7: "Sneaker",
+    8: "Bag",
+    9: "Ankle boot",
+}
+
 
 class ModelBuilder:
     def __init__(self, model_type="dense", use_tuner=False, retrain=False):
@@ -30,6 +43,7 @@ class ModelBuilder:
         self.epochs = 5
         self.learning_rate = 0.001
         self.history = None
+        self.loaded = False
         # Create saved dir
         self.path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "saved", "lab5"
@@ -42,13 +56,18 @@ class ModelBuilder:
 
     def load_or_build(self):
         model = None
-        if Path(
-            self.path + f"/{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
-        ).exists():
+        if (
+            not self.retrain
+            and Path(
+                self.path
+                + f"\\{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
+            ).exists()
+        ):
             model = keras.saving.load_model(
                 self.path
-                + f"/{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
+                + f"\\{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
             )
+            self.loaded = True
         if self.retrain or model is None:
             self.build_model()
         else:
@@ -82,7 +101,7 @@ class ModelBuilder:
                     activation=hp.Choice("activation", ["relu", "tanh"]),
                 )
             )
-        model.add(keras.layers.Dense(10, activation=tf.nn.softmax))
+        model.add(keras.layers.Dense(10, activation="softmax"))
         model.compile(
             optimizer=Adam(learning_rate=self.learning_rate),
             loss="sparse_categorical_crossentropy",
@@ -121,7 +140,7 @@ class ModelBuilder:
                 min_value=16,
                 max_value=128,
                 step=16,
-                activation=tf.nn.relu,
+                activation="relu",
             )
         )
         model.add(keras.layers.Dense(10, activation="softmax"))
@@ -165,8 +184,8 @@ class ModelBuilder:
             [
                 keras.layers.Input(shape=(28, 28), batch_size=self.batch_size),
                 keras.layers.Flatten(),
-                keras.layers.Dense(128, activation=tf.nn.relu),
-                keras.layers.Dense(10, activation=tf.nn.softmax),
+                keras.layers.Dense(128, activation="relu"),
+                keras.layers.Dense(10, activation="softmax"),
             ]
         )
         model.compile(
@@ -199,6 +218,8 @@ class ModelBuilder:
         self.model = model
 
     def train(self, X_train, X_test, y_train, y_test):
+        # if self.loaded and not self.retrain:
+        #     return
         print("Training...")
         if self.use_tuner:
             self.train_tuned(
@@ -293,6 +314,9 @@ class ModelBuilder:
             self.path + f"/{self.model_type}{"_tuner" if self.use_tuner else ""}.keras"
         )
 
+    def predict(self, test_data):
+        return self.model.predict(test_data)
+
 
 def main(parsed_args):
     fashion_mnist = keras.datasets.fashion_mnist
@@ -308,14 +332,32 @@ def main(parsed_args):
         retrain=parsed_args.retrain,
     )
     builder.load_or_build()
-    builder.train(
-        X_train=train_images,
-        X_test=test_images,
-        y_train=train_labels,
-        y_test=test_labels,
-    )
-    builder.plot_history_simple()
-    builder.save_model()
+    print(f"Loaded: {builder.loaded} and retrain: {parsed_args.retrain}")
+    if not builder.loaded or parsed_args.retrain:
+        builder.train(
+            X_train=train_images,
+            X_test=test_images,
+            y_train=train_labels,
+            y_test=test_labels,
+        )
+        builder.plot_history_simple()
+        builder.save_model()
+
+    predict_data = test_images
+    if parsed_args.predict and Path(parsed_args.path).exists():
+        print("Loading predictions...")
+        image = keras.utils.load_img(
+            parsed_args.path, color_mode="grayscale", target_size=(28, 28)
+        )
+        input_arr = keras.utils.img_to_array(image)
+        input_arr = 1 - input_arr
+        input_arr = input_arr / 255.0
+        predict_data = np.array([input_arr])
+
+    predictions = builder.predict(predict_data)
+
+    result = np.argmax(predictions[0])
+    print(f"Wynik pedykcji: {CLASS_NAMES[result]} i wartość: {result}")
 
 
 if __name__ == "__main__":
@@ -338,6 +380,15 @@ if __name__ == "__main__":
         "--retrain",
         action="store_true",
         help="If set, force retraining even if saved model exists",
+    )
+    parser.add_argument(
+        "--predict",
+        action="store_true",
+        help="If set, predict image from path",
+    )
+    parser.add_argument(
+        "--path",
+        default="",
     )
     args = parser.parse_args()
     main(args)
